@@ -2,27 +2,32 @@
 
 import sys
 import getopt
+import concurrent.futures
 from scapy.all import *
 from scapy.layers.l2 import ARP, Ether
 
 targets = ""
+threads = 50
 
 
 def usage():
     print("Simple Network Scanner - Network Security Testing")
-    print("Usage: sudo python3 Host_Discovery.py -t TARGETS")
+    print("Usage: sudo python3 Host_Discovery.py -i TARGETS")
     print()
-    print("Target Formats :")
+    print("Target Formats:")
     print("  Single IP:       192.168.1.7")
     print("  Multiple IPs:    192.168.1.1,192.168.1.7")
     print("  IP Range:        192.168.1.1-192.168.1.7")
     print("  Subnet:          192.168.1.0/24")
     print()
+    print("Options:")
+    print("  -t, --threads    Number of threads (default: 50, max: 200)")
+    print()
     print("Examples:")
-    print("  sudo python3 Host_Discovery.py -t 192.168.1.7")
-    print("  sudo python3 Host_Discovery.py -t 192.168.1.1,192.168.1.7")
-    print("  sudo python3 Host_Discovery.py -t 192.168.1.1-192.168.1.7")
-    print("  sudo python3 Host_Discovery.py -t 192.168.1.0/24")
+    print("  sudo python3 Host_Discovery.py -i 192.168.1.7")
+    print("  sudo python3 Host_Discovery.py -i 192.168.1.1,192.168.1.7 -t 100")
+    print("  sudo python3 Host_Discovery.py -i 192.168.1.1-192.168.1.7")
+    print("  sudo python3 Host_Discovery.py -i 192.168.1.0/24")
     print()
     print("Note: Requires root privileges and scapy library")
     sys.exit(0)
@@ -68,21 +73,21 @@ def scan_ip(ip):
         responses = srp(arp_request_broadcast, timeout=2, verbose=0)[0]
 
         if len(responses) > 0:
-            return responses[0][1].hwsrc
-        return None
+            return ip, responses[0][1].hwsrc
+        return ip, None
 
     except:
-        return None
+        return ip, None
 
 
 def main():
-    global targets
+    global targets, threads
 
     if not len(sys.argv[1:]):
         usage()
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "ht:", ["help", "targets="])
+        opts, args = getopt.getopt(sys.argv[1:], "hi:t:", ["help", "ip=", "threads="])
     except getopt.GetoptError as err:
         print(str(err))
         usage()
@@ -90,14 +95,19 @@ def main():
     for o, a in opts:
         if o in ("-h", "--help"):
             usage()
-        elif o in ("-t", "--targets"):
+        elif o in ("-i", "--ip"):
             targets = a
+        elif o in ("-t", "--threads"):
+            threads = int(a)
+            if threads > 200:
+                print("[!] Maximum threads for host discovery is 200")
+                threads = 200
         else:
             print("flag provided but not defined: " + o)
             usage()
 
     if not targets:
-        print("[-] Targets are required")
+        print("[-] IPs are required")
         usage()
 
     ip_list = parse_targets(targets)
@@ -107,11 +117,13 @@ def main():
 
     live_hosts = []
 
-    for ip in ip_list:
-        mac = scan_ip(ip)
-        if mac:
-            print("[+] " + ip + " - MAC: " + mac)
-            live_hosts.append(ip)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
+        results = executor.map(scan_ip, ip_list)
+
+        for ip, mac in results:
+            if mac:
+                print("[+] " + ip + " - MAC: " + mac)
+                live_hosts.append(ip)
 
     print("=" * 50)
     print("[*] Scan completed.")
